@@ -22,15 +22,13 @@ const COLORS = {
   player: 0xffffff,
   enemy: 0x7cff70,
   red: 0xff3b30,
-  bullet: 0xffd800,
-  mine: 0xff7a00
+  bullet: 0xffd800
 };
 
 const WEAPONS = [
   { id:"pistol",  name:"Pištoľ",     desc:"Stredná rýchlosť, presná", fireRateMs: 260, bullets:1, spreadDeg:2,  speed:620, damage:22 },
   { id:"shotgun", name:"Brokovnica", desc:"Pomaly, ale veľa peliet",  fireRateMs: 700, bullets:6, spreadDeg:18, speed:560, damage:12 },
-  { id:"smg",     name:"Samopal",    desc:"Rýchlo, menej presné",     fireRateMs: 120, bullets:1, spreadDeg:10, speed:650, damage:15 },
-  { id:"mine",    name:"Míny",       desc:"Mina zostane ležať a zabije zombie pri priblížení", fireRateMs: 420, bullets:1, spreadDeg:0, speed:0, damage:999, mine:true }
+  { id:"smg",     name:"Samopal",    desc:"Rýchlo, menej presné",     fireRateMs: 120, bullets:1, spreadDeg:10, speed:650, damage:15 }
 ];
 
 function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
@@ -57,6 +55,8 @@ class MainScene extends Phaser.Scene {
     this.wave = 1;
 
     this.fireCooldown = 0;
+    this.gameStarted = false;
+    this.menuMode = "start";
 
     this.lastAim = new Phaser.Math.Vector2(1, 0);
 
@@ -86,7 +86,6 @@ class MainScene extends Phaser.Scene {
     this.makeSolidTexture("tex_player", COLORS.player, 14, 14);
     this.makeSolidTexture("tex_enemy",  COLORS.enemy,  14, 14);
     this.makeSolidTexture("tex_bullet", COLORS.bullet,  6,  6);
-    this.makeSolidTexture("tex_mine",   COLORS.mine,   10, 10);
 
     this.worldW = MAP_W * TILE;
     this.worldH = MAP_H * TILE;
@@ -136,6 +135,10 @@ class MainScene extends Phaser.Scene {
     this.uiHint   = this.add.text(10, 100, "Strieľanie: pravý joystick potiahni smerom", { fontSize:"14px", color:"#cfcfcf" }).setScrollFactor(0).setDepth(150);
     this.uiInfo   = this.add.text(10, 124, "", { fontSize:"14px", color:"#cfcfcf" }).setScrollFactor(0).setDepth(150);
 
+    this.btnWeaponsBg = this.add.rectangle(w - 48, 38, 72, 42, 0x1c1c1c, 0.92).setStrokeStyle(2, 0x555555).setScrollFactor(0).setDepth(180).setInteractive().setVisible(false);
+    this.btnWeaponsTxt = this.add.text(w - 48, 38, "ZBR", { fontSize:"15px", color:"#fff" }).setOrigin(0.5).setScrollFactor(0).setDepth(181).setVisible(false);
+    this.btnWeaponsBg.on("pointerdown", ()=> this.openPauseMenu());
+
     // Menu + joysticks
     this.buildMenu();
     this.createJoysticks();
@@ -152,7 +155,7 @@ class MainScene extends Phaser.Scene {
     this.cameras.main.scrollY = 0;
 
     this.refreshMenuWeapon();
-    this.setState("menu");
+    this.setState("menu", { mode:"start" });
   }
 
   makeSolidTexture(key, color, w, h){
@@ -192,7 +195,7 @@ class MainScene extends Phaser.Scene {
     this.menu = this.add.container(0,0).setScrollFactor(0);
 
     const panel = this.add.rectangle(w/2, h/2, w*0.92, h*0.56, 0x000000, 0.65).setStrokeStyle(2, 0x444444);
-    const title = this.add.text(w/2, h/2 - 160, "Vyber zbraň", { fontSize:"24px", color:"#fff" }).setOrigin(0.5);
+    this.menuTitle = this.add.text(w/2, h/2 - 160, "Vyber zbraň", { fontSize:"24px", color:"#fff" }).setOrigin(0.5);
 
     this.menuWeaponName = this.add.text(w/2, h/2 - 90, "", { fontSize:"22px", color:"#fff" }).setOrigin(0.5);
     this.menuWeaponDesc = this.add.text(w/2, h/2 - 55, "", { fontSize:"14px", color:"#cfcfcf", align:"center" }).setOrigin(0.5);
@@ -202,34 +205,51 @@ class MainScene extends Phaser.Scene {
     const prevTxt = this.add.text(w/2 - 120, h/2, "◀", { fontSize:"26px", color:"#fff" }).setOrigin(0.5);
     const nextTxt = this.add.text(w/2 + 120, h/2, "▶", { fontSize:"26px", color:"#fff" }).setOrigin(0.5);
 
-    const btnStart = this.add.rectangle(w/2, h/2 + 110, 240, 66, 0x2bdc4a, 0.95).setStrokeStyle(2, 0x0f6b22).setInteractive();
-    const startTxt = this.add.text(w/2, h/2 + 110, "ŠTART", { fontSize:"22px", color:"#111" }).setOrigin(0.5);
+    this.menuActionBtn = this.add.rectangle(w/2, h/2 + 110, 240, 66, 0x2bdc4a, 0.95).setStrokeStyle(2, 0x0f6b22).setInteractive();
+    this.menuActionTxt = this.add.text(w/2, h/2 + 110, "ŠTART", { fontSize:"22px", color:"#111" }).setOrigin(0.5);
 
-    this.menu.add([panel, title, this.menuWeaponName, this.menuWeaponDesc, btnPrev, btnNext, prevTxt, nextTxt, btnStart, startTxt]);
+    this.menu.add([panel, this.menuTitle, this.menuWeaponName, this.menuWeaponDesc, btnPrev, btnNext, prevTxt, nextTxt, this.menuActionBtn, this.menuActionTxt]);
     this.menu.list.forEach(o => o.setScrollFactor(0).setDepth(200));
 
     btnPrev.on("pointerdown", ()=>{ this.weaponIndex = (this.weaponIndex - 1 + WEAPONS.length) % WEAPONS.length; this.refreshMenuWeapon(); });
     btnNext.on("pointerdown", ()=>{ this.weaponIndex = (this.weaponIndex + 1) % WEAPONS.length; this.refreshMenuWeapon(); });
-    btnStart.on("pointerdown", ()=> this.startGame());
+    this.menuActionBtn.on("pointerdown", ()=> this.confirmMenuWeapon());
+    this.refreshMenuModeVisuals();
   }
 
-  setState(s){
+  setState(s, opts = {}){
     this.state = s;
+    if (opts.mode) this.menuMode = opts.mode;
+
     const isMenu = (s === "menu");
     const isPlaying = (s === "playing");
 
     this.menu.setVisible(isMenu);
+    this.refreshMenuModeVisuals();
 
     this.joyLeft.base.setVisible(isPlaying);
     this.joyLeft.knob.setVisible(isPlaying);
     this.joyRight.base.setVisible(isPlaying);
     this.joyRight.knob.setVisible(isPlaying);
 
-    if (isMenu){
-      this.cameras.main.stopFollow();
-      this.cameras.main.scrollX = 0;
-      this.cameras.main.scrollY = 0;
-      this.resetRun(true);
+    if (this.btnWeaponsBg){
+      this.btnWeaponsBg.setVisible(isPlaying && this.gameStarted);
+      this.btnWeaponsTxt.setVisible(isPlaying && this.gameStarted);
+    }
+
+    if (isPlaying){
+      this.physics.world.resume();
+      this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+    } else {
+      this.physics.world.pause();
+      this.clearTouchInput(true);
+
+      if (this.menuMode === "start"){
+        this.cameras.main.stopFollow();
+        this.cameras.main.scrollX = 0;
+        this.cameras.main.scrollY = 0;
+        this.resetRun(true);
+      }
     }
   }
 
@@ -237,6 +257,55 @@ class MainScene extends Phaser.Scene {
     const ww = WEAPONS[this.weaponIndex];
     this.menuWeaponName.setText(ww.name);
     this.menuWeaponDesc.setText(ww.desc);
+  }
+
+  refreshMenuModeVisuals(){
+    if (!this.menuTitle || !this.menuActionTxt) return;
+
+    const paused = this.menuMode === "pause";
+    this.menuTitle.setText(paused ? "Pauza – vyber zbraň" : "Vyber zbraň");
+    this.menuActionTxt.setText(paused ? "POKRAČOVAŤ" : "ŠTART");
+  }
+
+  clearTouchInput(resetKnobs=false){
+    this.touch.left.active = false;
+    this.touch.right.active = false;
+    this.touch.firing = false;
+    this.touch.left.id = null;
+    this.touch.right.id = null;
+    this.touch.left.basePos = null;
+    this.touch.right.basePos = null;
+    this.touch.left.vec.set(0,0);
+    this.touch.right.vec.set(0,0);
+    if (this.player?.body) this.player.body.setVelocity(0,0);
+
+    if (resetKnobs && this.joyLeft && this.joyRight){
+      this.joyLeft.knob.setPosition(this.joyLeft.base.x, this.joyLeft.base.y);
+      this.joyRight.knob.setPosition(this.joyRight.base.x, this.joyRight.base.y);
+    }
+  }
+
+  openPauseMenu(){
+    if (!this.gameStarted || this.state !== "playing") return;
+    this.weaponIndex = Math.max(0, WEAPONS.findIndex(w => w.id === this.weapon.id));
+    this.refreshMenuWeapon();
+    this.uiInfo.setText("Hra pozastavená");
+    this.setState("menu", { mode:"pause" });
+  }
+
+  confirmMenuWeapon(){
+    this.weapon = WEAPONS[this.weaponIndex];
+    this.uiWeapon.setText(`Zbraň: ${this.weapon.name}`);
+
+    if (this.menuMode === "start" || !this.gameStarted){
+      this.gameStarted = true;
+      this.resetRun(false);
+      this.uiInfo.setText("Preži a vyčisti vlnu!");
+    } else {
+      this.uiInfo.setText(`Pokračuješ so zbraňou: ${this.weapon.name}`);
+    }
+
+    this.setState("playing");
   }
 
   updateUI(){
@@ -253,15 +322,7 @@ class MainScene extends Phaser.Scene {
     this.fireCooldown = 0;
     this.lastAim.set(1, 0);
 
-    this.touch.left.active = false;
-    this.touch.right.active = false;
-    this.touch.firing = false;
-    this.touch.left.id = null;
-    this.touch.right.id = null;
-    this.touch.left.basePos = null;
-    this.touch.right.basePos = null;
-    this.touch.left.vec.set(0,0);
-    this.touch.right.vec.set(0,0);
+    this.clearTouchInput(true);
 
     this.enemies.clear(true, true);
 
@@ -280,14 +341,8 @@ class MainScene extends Phaser.Scene {
   }
 
   startGame(){
-    this.weapon = WEAPONS[this.weaponIndex];
-    this.uiWeapon.setText(`Zbraň: ${this.weapon.name}`);
-
-    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
-
-    this.setState("playing");
-    this.resetRun(false);
-    this.uiInfo.setText("Preži a vyčisti vlnu!");
+    this.menuMode = "start";
+    this.confirmMenuWeapon();
   }
 
   takeDamage(dmg){
@@ -295,7 +350,7 @@ class MainScene extends Phaser.Scene {
     this.uiInfo.setText(`-${dmg} HP`);
     if (this.hp <= 0){
       this.uiInfo.setText(`💀 Koniec! Skóre: ${this.score}. Vyber zbraň a ŠTART.`);
-      this.setState("menu");
+      this.setState("menu", { mode:"start" });
     }
   }
 
@@ -320,7 +375,7 @@ class MainScene extends Phaser.Scene {
     this.uiInfo.setText(`Vlna ${wave} (zombie: ${count})`);
   }
 
-  // Manual bullet / mine spawn (NO physics)
+  // Manual bullet spawn (NO physics)
   tryFire(){
     if (this.fireCooldown > 0) return;
     this.fireCooldown = this.weapon.fireRateMs;
@@ -340,8 +395,7 @@ class MainScene extends Phaser.Scene {
       const off = (bullets === 1) ? 0 : Phaser.Math.Linear(-spread/2, spread/2, i/(bullets-1));
       const ang = baseAngle + degToRad(off + Phaser.Math.Between(-spread/6, spread/6));
 
-      const isMine = !!this.weapon.mine;
-      const sp = isMine ? 0 : this.weapon.speed;
+      const sp = this.weapon.speed;
       let vx = Math.cos(ang) * sp;
       let vy = Math.sin(ang) * sp;
 
@@ -349,23 +403,20 @@ class MainScene extends Phaser.Scene {
         vx = sp; vy = 0;
       }
 
-      const spawnDist = isMine ? 22 : 18;
+      const spawnDist = 18;
       const sx = this.player.x + Math.cos(ang) * spawnDist;
       const sy = this.player.y + Math.sin(ang) * spawnDist;
 
       // render as sprite (no physics body)
-      const go = this.add.sprite(sx, sy, isMine ? "tex_mine" : "tex_bullet");
+      const go = this.add.sprite(sx, sy, "tex_bullet");
 
       this.bullets.push({
         go,
-        kind: isMine ? "mine" : "bullet",
         x: sx, y: sy,
         vx, vy,
         life: 0.95, // seconds
         damage: this.weapon.damage,
-        w: isMine ? 10 : 6,
-        h: isMine ? 10 : 6,
-        triggerRadius: isMine ? 18 : 0
+        w: 6, h: 6
       });
     }
   }
@@ -446,11 +497,9 @@ class MainScene extends Phaser.Scene {
       const b = this.bullets[i];
       b.life -= dt;
 
-      // move bullets, mines stay on ground
-      if (b.kind !== "mine"){
-        b.x += b.vx * dt;
-        b.y += b.vy * dt;
-      }
+      // move
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
       b.go.x = b.x;
       b.go.y = b.y;
 
@@ -468,25 +517,10 @@ class MainScene extends Phaser.Scene {
         continue;
       }
 
-      // hit enemies
+      // hit enemies (AABB)
       let hit = false;
       this.enemies.getChildren().forEach(e=>{
         if (hit || !e?.active) return;
-
-        if (b.kind === "mine"){
-          const dx = e.x - b.x;
-          const dy = e.y - b.y;
-          if ((dx*dx + dy*dy) <= (b.triggerRadius * b.triggerRadius)){
-            e.hp = 0;
-            e.flash = 90;
-            hit = true;
-            e.destroy();
-            this.score += 10;
-            this.uiInfo.setText(`💥 Mina +10`);
-          }
-          return;
-        }
-
         if (aabbOverlap(b.x, b.y, b.w, b.h, e.x, e.y, enemyW, enemyH)){
           e.hp -= b.damage;
           e.flash = 90;
