@@ -69,6 +69,7 @@ class MainScene extends Phaser.Scene {
 
     this._tmp = new Phaser.Math.Vector2();
     this._aim = new Phaser.Math.Vector2(1,0);
+    this.audioCtx = null;
 
     // Manual bullets list
     this.bullets = [];
@@ -342,6 +343,87 @@ class MainScene extends Phaser.Scene {
     this.uiInfo.setText("");
   }
 
+
+  ensureAudio(){
+    try {
+      if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (this.audioCtx.state === "suspended") this.audioCtx.resume();
+      return this.audioCtx;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  playTone(freq=220, duration=0.08, type="square", volume=0.03, slideTo=null){
+    const ctx = this.ensureAudio();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(1, freq), ctx.currentTime);
+    if (slideTo !== null){
+      osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), ctx.currentTime + duration);
+    }
+
+    gain.gain.setValueAtTime(Math.max(0.0001, volume), ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + duration);
+  }
+
+  playShootSound(){
+    this.playTone(240, 0.055, "square", 0.035, 120);
+  }
+
+  playMinePlaceSound(){
+    this.playTone(620, 0.045, "triangle", 0.03, 500);
+  }
+
+  playMineWarnSound(){
+    this.playTone(880, 0.05, "triangle", 0.035, 760);
+  }
+
+  playZombieDieSound(){
+    this.playTone(170, 0.09, "sawtooth", 0.03, 110);
+    this.time.delayedCall(28, ()=> this.playTone(110, 0.12, "triangle", 0.02, 70));
+  }
+
+  playPlayerDieSound(){
+    this.playTone(130, 0.18, "sawtooth", 0.045, 70);
+    this.time.delayedCall(90, ()=> this.playTone(90, 0.28, "triangle", 0.035, 45));
+  }
+
+  spawnBlood(x, y){
+    for (let i = 0; i < 5; i++){
+      const dx = Phaser.Math.Between(-10, 10);
+      const dy = Phaser.Math.Between(-10, 10);
+      const dot = this.add.circle(x + dx, y + dy, Phaser.Math.Between(2, 4), 0xaa0000, 0.95);
+      this.tweens.add({
+        targets: dot,
+        alpha: 0,
+        scaleX: 1.8,
+        scaleY: 1.8,
+        y: dot.y + Phaser.Math.Between(-2, 6),
+        duration: 320 + Phaser.Math.Between(0, 140),
+        onComplete: ()=> dot.destroy()
+      });
+    }
+  }
+
+  onEnemyKilled(e){
+    if (!e?.active) return;
+    this.playZombieDieSound();
+    this.spawnBlood(e.x, e.y);
+    this.cameras.main.shake(80, 0.005);
+    e.destroy();
+    this.score += 10;
+    this.uiInfo.setText(`+10`);
+  }
+
   startGame(){
     this.menuMode = "start";
     this.confirmMenuWeapon();
@@ -350,7 +432,10 @@ class MainScene extends Phaser.Scene {
   takeDamage(dmg){
     this.hp = clamp(this.hp - dmg, 0, this.hpMax);
     this.uiInfo.setText(`-${dmg} HP`);
+    this.cameras.main.shake(70, 0.006);
     if (this.hp <= 0){
+      this.playPlayerDieSound();
+      this.cameras.main.shake(320, 0.02);
       this.uiInfo.setText(`💀 Koniec! Skóre: ${this.score}. Vyber zbraň a ŠTART.`);
       this.setState("menu", { mode:"start" });
     }
@@ -395,6 +480,8 @@ class MainScene extends Phaser.Scene {
       const sx = this.player.x + Math.cos(baseAngle) * spawnDist;
       const sy = this.player.y + Math.sin(baseAngle) * spawnDist;
       const go = this.add.sprite(sx, sy, "tex_mine");
+      go.setScale(1);
+      this.playMinePlaceSound();
 
       this.bullets.push({
         go,
@@ -404,10 +491,13 @@ class MainScene extends Phaser.Scene {
         damage: this.weapon.damage,
         w: 14, h: 14,
         isMine: true,
-        triggerRadius: 20
+        triggerRadius: 20,
+        warnPlayed: false
       });
       return;
     }
+
+    this.playShootSound();
 
     const bullets = this.weapon.bullets;
     const spread = this.weapon.spreadDeg;
@@ -528,7 +618,18 @@ class MainScene extends Phaser.Scene {
       if (!b.isMine){
         b.x += b.vx * dt;
         b.y += b.vy * dt;
+      } else if (!b.warnPlayed && b.life <= 0.28){
+        b.warnPlayed = true;
+        this.playMineWarnSound();
+        this.tweens.add({
+          targets: b.go,
+          scaleX: 1.35,
+          scaleY: 1.35,
+          yoyo: true,
+          duration: 90
+        });
       }
+
       b.go.x = b.x;
       b.go.y = b.y;
 
@@ -560,9 +661,7 @@ class MainScene extends Phaser.Scene {
           e.flash = 90;
           hit = true;
           if (e.hp <= 0){
-            e.destroy();
-            this.score += 10;
-            this.uiInfo.setText(`+10`);
+            this.onEnemyKilled(e);
           }
         }
       });
@@ -601,6 +700,7 @@ class MainScene extends Phaser.Scene {
   }
 
   onPointerDown(p){
+    this.ensureAudio();
     if (this.state !== "playing") return;
     const isLeftSide = p.x < this.scale.width/2;
 
