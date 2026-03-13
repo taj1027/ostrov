@@ -28,7 +28,8 @@ const COLORS = {
 const WEAPONS = [
   { id:"pistol",  name:"Pištoľ",     desc:"Stredná rýchlosť, presná", fireRateMs: 260, bullets:1, spreadDeg:2,  speed:620, damage:22 },
   { id:"shotgun", name:"Brokovnica", desc:"Pomaly, ale veľa peliet",  fireRateMs: 700, bullets:6, spreadDeg:18, speed:560, damage:12 },
-  { id:"smg",     name:"Samopal",    desc:"Rýchlo, menej presné",     fireRateMs: 120, bullets:1, spreadDeg:10, speed:650, damage:15 }
+  { id:"smg",     name:"Samopal",    desc:"Rýchlo, menej presné",     fireRateMs: 120, bullets:1, spreadDeg:10, speed:650, damage:15 },
+  { id:"mines",   name:"Míny",       desc:"Položí mínu pred hráča, vybuchne pri zombie", fireRateMs: 130, bullets:1, spreadDeg:0, speed:0, damage:999 }
 ];
 
 function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
@@ -86,6 +87,7 @@ class MainScene extends Phaser.Scene {
     this.makeSolidTexture("tex_player", COLORS.player, 14, 14);
     this.makeSolidTexture("tex_enemy",  COLORS.enemy,  14, 14);
     this.makeSolidTexture("tex_bullet", COLORS.bullet,  6,  6);
+    this.makeSolidTexture("tex_mine", 0xff6a00, 10, 10);
 
     this.worldW = MAP_W * TILE;
     this.worldH = MAP_H * TILE;
@@ -135,8 +137,8 @@ class MainScene extends Phaser.Scene {
     this.uiHint   = this.add.text(10, 100, "Strieľanie: pravý joystick potiahni smerom", { fontSize:"14px", color:"#cfcfcf" }).setScrollFactor(0).setDepth(150);
     this.uiInfo   = this.add.text(10, 124, "", { fontSize:"14px", color:"#cfcfcf" }).setScrollFactor(0).setDepth(150);
 
-    this.btnWeaponsBg = this.add.rectangle(w - 48, 38, 72, 42, 0x1c1c1c, 0.92).setStrokeStyle(2, 0x555555).setScrollFactor(0).setDepth(180).setInteractive().setVisible(false);
-    this.btnWeaponsTxt = this.add.text(w - 48, 38, "ZBR", { fontSize:"15px", color:"#fff" }).setOrigin(0.5).setScrollFactor(0).setDepth(181).setVisible(false);
+    this.btnWeaponsBg = this.add.rectangle(w - 48, 38, 56, 42, 0x1c1c1c, 0.92).setStrokeStyle(2, 0x555555).setScrollFactor(0).setDepth(180).setInteractive().setVisible(false);
+    this.btnWeaponsTxt = this.add.text(w - 48, 38, "🔫", { fontSize:"22px", color:"#fff" }).setOrigin(0.5).setScrollFactor(0).setDepth(181).setVisible(false);
     this.btnWeaponsBg.on("pointerdown", ()=> this.openPauseMenu());
 
     // Menu + joysticks
@@ -383,6 +385,30 @@ class MainScene extends Phaser.Scene {
     const aim = this.getSafeAim(this._aim);
     const baseAngle = Math.atan2(aim.y, aim.x);
 
+    if (this.weapon.id === "mines"){
+      if (this.bullets.length >= this.MAX_BULLETS){
+        const old = this.bullets.shift();
+        old?.go?.destroy?.();
+      }
+
+      const spawnDist = 22;
+      const sx = this.player.x + Math.cos(baseAngle) * spawnDist;
+      const sy = this.player.y + Math.sin(baseAngle) * spawnDist;
+      const go = this.add.sprite(sx, sy, "tex_mine");
+
+      this.bullets.push({
+        go,
+        x: sx, y: sy,
+        vx: 0, vy: 0,
+        life: 0.95, // same timer as bullets
+        damage: this.weapon.damage,
+        w: 14, h: 14,
+        isMine: true,
+        triggerRadius: 20
+      });
+      return;
+    }
+
     const bullets = this.weapon.bullets;
     const spread = this.weapon.spreadDeg;
 
@@ -416,7 +442,8 @@ class MainScene extends Phaser.Scene {
         vx, vy,
         life: 0.95, // seconds
         damage: this.weapon.damage,
-        w: 6, h: 6
+        w: 6, h: 6,
+        isMine: false
       });
     }
   }
@@ -476,7 +503,7 @@ class MainScene extends Phaser.Scene {
     if (right) mv.x += 1;
 
     if (mv.length() > 0.05) mv.normalize();
-    this.player.body.setVelocity(mv.x * 200, mv.y * 200);
+    this.player.body.setVelocity(mv.x * 400, mv.y * 400);
 
     // aim visual
     const aim = this.getSafeAim(this._aim);
@@ -497,9 +524,11 @@ class MainScene extends Phaser.Scene {
       const b = this.bullets[i];
       b.life -= dt;
 
-      // move
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
+      // move only non-mines
+      if (!b.isMine){
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+      }
       b.go.x = b.x;
       b.go.y = b.y;
 
@@ -510,18 +539,23 @@ class MainScene extends Phaser.Scene {
         continue;
       }
 
-      // kill if hits tree (water ignored)
-      if (this.isTreeAtWorld(b.x, b.y)){
+      // bullets die on tree, mines stay lying on ground
+      if (!b.isMine && this.isTreeAtWorld(b.x, b.y)){
         b.go.destroy();
         this.bullets.splice(i, 1);
         continue;
       }
 
-      // hit enemies (AABB)
+      // hit enemies
       let hit = false;
       this.enemies.getChildren().forEach(e=>{
         if (hit || !e?.active) return;
-        if (aabbOverlap(b.x, b.y, b.w, b.h, e.x, e.y, enemyW, enemyH)){
+
+        const collides = b.isMine
+          ? (Phaser.Math.Distance.Between(b.x, b.y, e.x, e.y) <= (b.triggerRadius || 20))
+          : aabbOverlap(b.x, b.y, b.w, b.h, e.x, e.y, enemyW, enemyH);
+
+        if (collides){
           e.hp -= b.damage;
           e.flash = 90;
           hit = true;
